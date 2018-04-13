@@ -493,6 +493,7 @@ class Camera1 extends CameraController implements Camera.PreviewCallback, Camera
             @Override
             public void run() {
                 LOG.v("capturePicture: performing.", mIsCapturingImage);
+                if (mCamera == null) return;
                 if (mIsCapturingImage) return;
                 if (mIsCapturingVideo && !mCameraOptions.isVideoSnapshotSupported()) return;
 
@@ -518,7 +519,7 @@ class Camera1 extends CameraController implements Camera.PreviewCallback, Camera
                             public void onPictureTaken(byte[] data, final Camera camera) {
                                 mIsCapturingImage = false;
                                 mCameraCallbacks.processImage(data, outputMatchesView, outputFlip);
-                                camera.startPreview(); // This is needed, read somewhere in the docs.
+                                //camera.startPreview(); // This is needed, read somewhere in the docs.
                             }
                         }
                 );
