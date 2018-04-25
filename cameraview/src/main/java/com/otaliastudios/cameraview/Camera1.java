@@ -14,6 +14,7 @@ import android.os.Build;
 import android.support.annotation.NonNull;
 import android.support.annotation.Nullable;
 import android.support.annotation.WorkerThread;
+import android.util.Log;
 import android.view.SurfaceHolder;
 
 import java.io.File;
@@ -492,37 +493,44 @@ class Camera1 extends CameraController implements Camera.PreviewCallback, Camera
         schedule(null, true, new Runnable() {
             @Override
             public void run() {
-                LOG.v("capturePicture: performing.", mIsCapturingImage);
-                if (mCamera == null) return;
-                if (mIsCapturingImage) return;
-                if (mIsCapturingVideo && !mCameraOptions.isVideoSnapshotSupported()) return;
+                try {
+                    LOG.v("capturePicture: performing.", mIsCapturingImage);
+                    if (mCamera == null) return;
+                    if (mIsCapturingImage) return;
+                    if (mIsCapturingVideo && !mCameraOptions.isVideoSnapshotSupported()) return;
 
-                mIsCapturingImage = true;
-                final int sensorToOutput = computeSensorToOutputOffset();
-                final int sensorToView = computeSensorToViewOffset();
-                final boolean outputMatchesView = (sensorToOutput + sensorToView + 180) % 180 == 0;
-                final boolean outputFlip = mFacing == Facing.FRONT;
-                Camera.Parameters params = mCamera.getParameters();
-                params.setRotation(sensorToOutput);
-                mCamera.setParameters(params);
-                mCamera.takePicture(
-                        new Camera.ShutterCallback() {
-                            @Override
-                            public void onShutter() {
-                                mCameraCallbacks.onShutter(false);
+                    mIsCapturingImage = true;
+                    final int sensorToOutput = computeSensorToOutputOffset();
+                    final int sensorToView = computeSensorToViewOffset();
+                    final boolean outputMatchesView = (sensorToOutput + sensorToView + 180) % 180 == 0;
+                    final boolean outputFlip = mFacing == Facing.FRONT;
+                    Camera.Parameters params = mCamera.getParameters();
+                    params.setRotation(sensorToOutput);
+                    mCamera.setParameters(params);
+                    mCamera.takePicture(
+                            new Camera.ShutterCallback() {
+                                @Override
+                                public void onShutter() {
+                                    mCameraCallbacks.onShutter(false);
+                                }
+                            },
+                            null,
+                            null,
+                            new Camera.PictureCallback() {
+                                @Override
+                                public void onPictureTaken(byte[] data, final Camera camera) {
+                                    mIsCapturingImage = false;
+                                    mCameraCallbacks.processImage(data, outputMatchesView, outputFlip);
+                                    //camera.startPreview(); // This is needed, read somewhere in the docs.
+                                }
                             }
-                        },
-                        null,
-                        null,
-                        new Camera.PictureCallback() {
-                            @Override
-                            public void onPictureTaken(byte[] data, final Camera camera) {
-                                mIsCapturingImage = false;
-                                mCameraCallbacks.processImage(data, outputMatchesView, outputFlip);
-                                //camera.startPreview(); // This is needed, read somewhere in the docs.
-                            }
-                        }
-                );
+                    );
+                }catch (RuntimeException e){
+                    Log.e(TAG, "capturePicture" + e);
+                } catch (Exception e) {
+                    Log.e(TAG, "capturePicture" + e);
+                }
+
             }
         });
     }
@@ -534,52 +542,58 @@ class Camera1 extends CameraController implements Camera.PreviewCallback, Camera
         schedule(null, true, new Runnable() {
             @Override
             public void run() {
-                LOG.v("captureSnapshot: performing.", mIsCapturingImage);
-                if (mIsCapturingImage) return;
-                // This won't work while capturing a video.
-                // Switch to capturePicture.
-                if (mIsCapturingVideo) {
-                    capturePicture();
-                    return;
-                }
-                mIsCapturingImage = true;
-                mCamera.setOneShotPreviewCallback(new Camera.PreviewCallback() {
-                    @Override
-                    public void onPreviewFrame(final byte[] data, Camera camera) {
-                        mCameraCallbacks.onShutter(true);
-
-                        // Got to rotate the preview frame, since byte[] data here does not include
-                        // EXIF tags automatically set by camera. So either we add EXIF, or we rotate.
-                        // Adding EXIF to a byte array, unfortunately, is hard.
-                        final int sensorToOutput = computeSensorToOutputOffset();
-                        final int sensorToView = computeSensorToViewOffset();
-                        final boolean outputMatchesView = (sensorToOutput + sensorToView + 180) % 180 == 0;
-                        final boolean outputFlip = mFacing == Facing.FRONT;
-                        final boolean flip = sensorToOutput % 180 != 0;
-                        final int preWidth = mPreviewSize.getWidth();
-                        final int preHeight = mPreviewSize.getHeight();
-                        final int postWidth = flip ? preHeight : preWidth;
-                        final int postHeight = flip ? preWidth : preHeight;
-                        final int format = mPreviewFormat;
-                        WorkerHandler.run(new Runnable() {
-                            @Override
-                            public void run() {
-
-                                LOG.v("captureSnapshot: rotating.");
-                                byte[] rotatedData = RotationHelper.rotate(data, preWidth, preHeight, sensorToOutput);
-                                LOG.v("captureSnapshot: rotated.");
-                                YuvImage yuv = new YuvImage(rotatedData, format, postWidth, postHeight, null);
-                                mCameraCallbacks.processSnapshot(yuv, outputMatchesView, outputFlip);
-                                mIsCapturingImage = false;
-                            }
-                        });
-
-                        // It seems that the buffers are already cleared here, so we need to allocate again.
-                        mCamera.setPreviewCallbackWithBuffer(null); // Release anything left
-                        mCamera.setPreviewCallbackWithBuffer(Camera1.this); // Add ourselves
-                        mFrameManager.allocate(ImageFormat.getBitsPerPixel(mPreviewFormat), mPreviewSize);
+                try {
+                    LOG.v("captureSnapshot: performing.", mIsCapturingImage);
+                    if (mIsCapturingImage) return;
+                    // This won't work while capturing a video.
+                    // Switch to capturePicture.
+                    if (mIsCapturingVideo) {
+                        capturePicture();
+                        return;
                     }
-                });
+                    mIsCapturingImage = true;
+                    mCamera.setOneShotPreviewCallback(new Camera.PreviewCallback() {
+                        @Override
+                        public void onPreviewFrame(final byte[] data, Camera camera) {
+                            mCameraCallbacks.onShutter(true);
+
+                            // Got to rotate the preview frame, since byte[] data here does not include
+                            // EXIF tags automatically set by camera. So either we add EXIF, or we rotate.
+                            // Adding EXIF to a byte array, unfortunately, is hard.
+                            final int sensorToOutput = computeSensorToOutputOffset();
+                            final int sensorToView = computeSensorToViewOffset();
+                            final boolean outputMatchesView = (sensorToOutput + sensorToView + 180) % 180 == 0;
+                            final boolean outputFlip = mFacing == Facing.FRONT;
+                            final boolean flip = sensorToOutput % 180 != 0;
+                            final int preWidth = mPreviewSize.getWidth();
+                            final int preHeight = mPreviewSize.getHeight();
+                            final int postWidth = flip ? preHeight : preWidth;
+                            final int postHeight = flip ? preWidth : preHeight;
+                            final int format = mPreviewFormat;
+                            WorkerHandler.run(new Runnable() {
+                                @Override
+                                public void run() {
+
+                                    LOG.v("captureSnapshot: rotating.");
+                                    byte[] rotatedData = RotationHelper.rotate(data, preWidth, preHeight, sensorToOutput);
+                                    LOG.v("captureSnapshot: rotated.");
+                                    YuvImage yuv = new YuvImage(rotatedData, format, postWidth, postHeight, null);
+                                    mCameraCallbacks.processSnapshot(yuv, outputMatchesView, outputFlip);
+                                    mIsCapturingImage = false;
+                                }
+                            });
+
+                            // It seems that the buffers are already cleared here, so we need to allocate again.
+                            mCamera.setPreviewCallbackWithBuffer(null); // Release anything left
+                            mCamera.setPreviewCallbackWithBuffer(Camera1.this); // Add ourselves
+                            mFrameManager.allocate(ImageFormat.getBitsPerPixel(mPreviewFormat), mPreviewSize);
+                        }
+                    });
+                }catch (RuntimeException e){
+                    Log.e(TAG, "capturePicture" + e);
+                } catch (Exception e) {
+                    Log.e(TAG, "capturePicture" + e);
+                }
             }
         });
     }
